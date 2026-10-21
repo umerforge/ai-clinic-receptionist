@@ -54,6 +54,7 @@ Useful settings in `.env`:
 | `STT_LANGUAGE_HINTS` | `ur,en` | Languages Soniox should expect |
 | `TTS_SPEED` | `1.0` | Speaking rate, `0.7` to `1.3` |
 | `BACKGROUND_AMBIENCE_FILE` | `assets/hospital-ambience.mp3` | Looping call ambience |
+| `BACKGROUND_MIX_VOLUME` | `0.12` | Ambience level under the agent voice |
 | `SONIOX_ENDPOINT_DELAY_MS` | `800` | Endpointing delay before a reply |
 | `SONIOX_ENDPOINT_SENSITIVITY` | `0.3` | Endpointing sensitivity |
 | `SONIOX_ENDPOINT_LATENCY_LEVEL` | `1` | Higher is more aggressive |
@@ -75,8 +76,8 @@ Soniox.
 
 The ElevenLabs hospital ambience in `assets/hospital-ambience.mp3` loops under
 the call at low volume, and soft typing plays only while the agent is thinking or
-calling a tool. The ElevenLabs clip is 12 seconds long, so it loops for the whole
-call.
+calling a tool. The clip is mixed into the **same audio track** as the agent's
+voice, so a browser or SIP client only has to play the primary agent track.
 
 Replace `assets/hospital-ambience.mp3` with another recording, or point
 `BACKGROUND_AMBIENCE_FILE` at a different file. If the file is missing, the agent
@@ -87,19 +88,21 @@ background audio with:
 ENABLE_BACKGROUND_AUDIO=false
 ```
 
-Volume (`BACKGROUND_AMBIENCE_VOLUME`) and typing frequency are configurable in
-`.env`. The default is `0.30`; keep it around `0.20`–`0.35` so speech stays clear.
+`BACKGROUND_MIX_VOLUME` controls the ambience under the agent voice on real
+calls and defaults to `0.12`. The ambience automatically ducks to half volume
+while the agent speaks, keeping the voice clear. `BACKGROUND_AMBIENCE_VOLUME`
+controls the louder local playback in console mode and defaults to `0.30`. Keep
+the call mix around `0.10`–`0.18` so speech stays clear.
 
-LiveKit's background track cannot play in console mode, so the agent plays the
-same ambience through your local speakers when you run
-`python main.py console`. Real calls use the published `background_audio` track.
-If console mode still has no ambience, check the
+Console mode does not publish a room track, so the agent plays the same ambience
+through your local speakers when you run `python main.py console`. If console
+mode still has no ambience, check the
 `console ambience playing locally: ...` log line and your Mac's output device.
 
 Troubleshooting tip: the agent logs `speech provider=...` at startup, and if the
 ambience file is missing it logs `background ambience file not found`. The MP3
 was normalized to a `-3 dB` peak and crossfaded for seamless looping. If it is
-still too quiet, raise `BACKGROUND_AMBIENCE_VOLUME` to `0.40` or `0.50`.
+still too quiet on a call, raise `BACKGROUND_MIX_VOLUME` to `0.15` or `0.18`.
 
 ## Run
 

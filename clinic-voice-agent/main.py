@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
 import time
+from collections import deque
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import numpy as np
 from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentSession,
-    AudioConfig,
-    BackgroundAudioPlayer,
+    AgentStateChangedEvent,
     BuiltinAudioClip,
     CloseEvent,
     JobContext,
@@ -25,6 +28,8 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
+from livekit.agents.utils.audio import AudioByteStream
+from livekit.agents.voice import io
 from livekit.plugins import deepgram, groq, silero, soniox
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -214,33 +219,287 @@ class ConsoleAmbience:
                 stream.close(ignore_errors=True)
 
 
-def _build_background_audio() -> BackgroundAudioPlayer | None:
-    if not settings.enable_background_audio:
-        return None
-    return BackgroundAudioPlayer(
-        ambient_sound=AudioConfig(
-            _ambient_source(),
-            volume=settings.background_ambience_volume,
-            fade_in=1.5,
-            fade_out=1.0,
-        ),
-        thinking_sound=[
-            AudioConfig(
-                BuiltinAudioClip.KEYBOARD_TYPING,
-                volume=settings.background_thinking_volume,
-                probability=settings.background_thinking_probability,
-                fade_in=0.2,
-                fade_out=0.2,
-            ),
-            AudioConfig(
-                BuiltinAudioClip.KEYBOARD_TYPING2,
-                volume=settings.background_thinking_volume,
-                probability=settings.background_thinking_probability,
-                fade_in=0.2,
-                fade_out=0.2,
-            ),
-        ],
-    )
+class AmbientAudioOutput(io.AudioOutput):
+    """Publish agent speech and clinic ambience on one audio track."""
+
+    def __init__(
+        self,
+        room: rtc.Room,
+        *,
+        ambience_path: Path,
+        ambience_volume: float,
+        thinking_paths: list[Path],
+        thinking_volume: float,
+        thinking_probability: float,
+        sample_rate: int = 24000,
+    ) -> None:
+        super().__init__(
+            label="clinic-ambient",
+            capabilities=io.AudioOutputCapabilities(pause=True),
+            sample_rate=sample_rate,
+        )
+        self._room = room
+        self._ambience_path = ambience_path
+        self._ambience_volume = ambience_volume
+        self._thinking_paths = thinking_paths
+        self._thinking_volume = thinking_volume
+        self._thinking_probability = thinking_probability
+        self._sample_rate = sample_rate
+        self._frame_samples = sample_rate // 50
+        self._source = rtc.AudioSource(sample_rate, 1, queue_size_ms=200)
+        self._publication: rtc.LocalTrackPublication | None = None
+        self._pump_task: asyncio.Task[None] | None = None
+        self._ambient = np.empty(0, dtype=np.int16)
+        self._ambient_position = 0
+        self._thinking: list[np.ndarray] = []
+        self._effect: np.ndarray | None = None
+        self._effect_position = 0
+        self._tts_bstream = AudioByteStream(
+            sample_rate, 1, samples_per_channel=self._frame_samples
+        )
+        self._tts_queue: deque[rtc.AudioFrame] = deque()
+        self._resampler: rtc.AudioResampler | None = None
+        self._resampler_input_rate: int | None = None
+        self._tts_played = 0.0
+        self._segment_started = False
+        self._captured_segment = False
+        self._flush_pending = False
+        self._paused = False
+        self._closed = False
+
+    @staticmethod
+    def _decode_audio(path: Path, volume: float, sample_rate: int) -> np.ndarray:
+        import av
+
+        container = av.open(str(path))
+        try:
+            stream = container.streams.audio[0]
+            resampler = av.AudioResampler(
+                format="s16", layout="mono", rate=sample_rate
+            )
+            chunks: list[np.ndarray] = []
+            for frame in container.decode(stream):
+                for output in resampler.resample(frame):
+                    chunks.append(output.to_ndarray().reshape(-1))
+            for output in resampler.resample(None):
+                chunks.append(output.to_ndarray().reshape(-1))
+        finally:
+            container.close()
+        if not chunks:
+            raise RuntimeError(f"audio file has no samples: {path}")
+        audio = np.concatenate(chunks).astype(np.float32) * volume
+        return np.clip(audio, -32768, 32767).astype(np.int16)
+
+    async def start(self) -> None:
+        self._ambient = self._decode_audio(
+            self._ambience_path, self._ambience_volume, self._sample_rate
+        )
+        for path in self._thinking_paths:
+            try:
+                self._thinking.append(
+                    self._decode_audio(path, self._thinking_volume, self._sample_rate)
+                )
+            except Exception:
+                logger.warning("could not load thinking sound: %s", path, exc_info=True)
+        track = rtc.LocalAudioTrack.create_audio_track("clinic_voice", self._source)
+        self._publication = await self._room.local_participant.publish_track(
+            track,
+            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+        )
+        try:
+            await asyncio.wait_for(self._publication.wait_for_subscription(), 5.0)
+        except asyncio.TimeoutError:
+            logger.info("no subscriber for the voice track yet; ambient will start after subscribe")
+        self._pump_task = asyncio.create_task(self._pump())
+        logger.info(
+            "clinic ambience mixed into the voice track: %s (volume %.2f)",
+            self._ambience_path,
+            self._ambience_volume,
+        )
+
+    @staticmethod
+    def _ensure_mono(frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        if frame.num_channels == 1:
+            return frame
+        samples = np.frombuffer(frame.data, dtype=np.int16).reshape(
+            -1, frame.num_channels
+        )
+        mono = samples.mean(axis=1).astype(np.int16)
+        return rtc.AudioFrame(
+            mono.tobytes(), frame.sample_rate, 1, mono.shape[0]
+        )
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+        self._captured_segment = True
+        if self._closed:
+            return
+        mono = self._ensure_mono(frame)
+        frames = [mono]
+        if mono.sample_rate != self._sample_rate:
+            if (
+                self._resampler is None
+                or self._resampler_input_rate != mono.sample_rate
+            ):
+                self._resampler = rtc.AudioResampler(
+                    mono.sample_rate, self._sample_rate, num_channels=1
+                )
+                self._resampler_input_rate = mono.sample_rate
+            frames = self._resampler.push(mono)
+        for output in frames:
+            for chunk in self._tts_bstream.push(output.data):
+                self._tts_queue.append(chunk)
+
+    def flush(self) -> None:
+        super().flush()
+        if self._resampler is not None:
+            for output in self._resampler.flush():
+                for chunk in self._tts_bstream.push(output.data):
+                    self._tts_queue.append(chunk)
+            self._resampler = None
+            self._resampler_input_rate = None
+        for chunk in self._tts_bstream.flush():
+            self._tts_queue.append(chunk)
+        if self._captured_segment:
+            self._flush_pending = True
+            self._maybe_finish_segment()
+
+    def clear_buffer(self) -> None:
+        super().clear_buffer()
+        self._tts_queue.clear()
+        self._tts_bstream.clear()
+        self._resampler = None
+        self._resampler_input_rate = None
+        self._flush_pending = False
+        if self._captured_segment:
+            self._captured_segment = False
+            self._segment_started = False
+            played = self._tts_played
+            self._tts_played = 0.0
+            self.on_playback_finished(
+                playback_position=played, interrupted=True
+            )
+
+    def pause(self) -> None:
+        super().pause()
+        self._paused = True
+
+    def resume(self) -> None:
+        super().resume()
+        self._paused = False
+
+    def play_thinking(self) -> None:
+        if not self._thinking or random.random() > self._thinking_probability:
+            return
+        self._effect = random.choice(self._thinking)
+        self._effect_position = 0
+
+    def _maybe_finish_segment(self) -> None:
+        if (
+            not self._flush_pending
+            or self._tts_queue
+            or not self._segment_started
+        ):
+            return
+        self._flush_pending = False
+        self._segment_started = False
+        self._captured_segment = False
+        played = self._tts_played
+        self._tts_played = 0.0
+        self.on_playback_finished(playback_position=played, interrupted=False)
+
+    def _next_ambient(self) -> np.ndarray:
+        output = np.empty(self._frame_samples, dtype=np.int16)
+        written = 0
+        while written < self._frame_samples:
+            take = min(
+                self._frame_samples - written,
+                len(self._ambient) - self._ambient_position,
+            )
+            start = self._ambient_position
+            output[written : written + take] = self._ambient[start : start + take]
+            written += take
+            self._ambient_position = (self._ambient_position + take) % len(
+                self._ambient
+            )
+        return output
+
+    def _next_effect(self) -> np.ndarray | None:
+        if self._effect is None:
+            return None
+        remaining = len(self._effect) - self._effect_position
+        take = min(self._frame_samples, remaining)
+        output = self._effect[
+            self._effect_position : self._effect_position + take
+        ]
+        self._effect_position += take
+        if self._effect_position >= len(self._effect):
+            self._effect = None
+            self._effect_position = 0
+        return output
+
+    def _mix(
+        self, tts: rtc.AudioFrame | None, effect: np.ndarray | None
+    ) -> rtc.AudioFrame:
+        ambient = self._next_ambient().astype(np.float32)
+        if tts is not None or effect is not None:
+            ambient *= 0.5
+        mixed = ambient.astype(np.int32)
+        if tts is not None:
+            voice = np.frombuffer(tts.data, dtype=np.int16)
+            mixed[: len(voice)] += voice
+        if effect is not None:
+            mixed[: len(effect)] += effect
+        mixed = np.clip(mixed, -32768, 32767).astype(np.int16)
+        return rtc.AudioFrame(
+            mixed.tobytes(), self._sample_rate, 1, self._frame_samples
+        )
+
+    async def _pump(self) -> None:
+        loop = asyncio.get_running_loop()
+        next_at = loop.time()
+        while not self._closed:
+            next_at += 1 / 50
+            delay = next_at - loop.time()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            else:
+                next_at = loop.time()
+            if self._closed:
+                break
+            tts = None if self._paused else (
+                self._tts_queue.popleft() if self._tts_queue else None
+            )
+            effect = None if self._paused else self._next_effect()
+            if tts is not None and not self._segment_started:
+                self._segment_started = True
+                self.on_playback_started(created_at=time.time())
+            try:
+                await self._source.capture_frame(self._mix(tts, effect))
+            except Exception:
+                logger.exception("ambient audio output stopped")
+                break
+            if tts is not None:
+                self._tts_played += tts.duration
+            self._maybe_finish_segment()
+
+    async def aclose(self) -> None:
+        self._closed = True
+        task = self._pump_task
+        self._pump_task = None
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        publication = self._publication
+        self._publication = None
+        if publication is not None:
+            with suppress(Exception):
+                await self._room.local_participant.unpublish_track(
+                    publication.sid
+                )
+        with suppress(Exception):
+            await self._source.aclose()
 
 
 def _build_transcript(session: AgentSession) -> str:
@@ -298,14 +557,11 @@ async def entrypoint(ctx: JobContext) -> None:
     tts = _build_tts()
     soniox_tts = tts if isinstance(tts, soniox.TTS) else None
     console_ambience = None
-    background_audio = None
-    if settings.enable_background_audio:
-        if ctx.is_fake_job:
-            console_ambience = ConsoleAmbience(
-                _ambient_file(), settings.background_ambience_volume
-            )
-        else:
-            background_audio = _build_background_audio()
+    ambient_output = None
+    if settings.enable_background_audio and ctx.is_fake_job:
+        console_ambience = ConsoleAmbience(
+            _ambient_file(), settings.background_ambience_volume
+        )
 
     session = AgentSession(
         stt=stt,
@@ -321,6 +577,20 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
+    if settings.enable_background_audio and not ctx.is_fake_job:
+        ambient_output = AmbientAudioOutput(
+            ctx.room,
+            ambience_path=_ambient_file(),
+            ambience_volume=settings.background_mix_volume,
+            thinking_paths=[
+                Path(BuiltinAudioClip.KEYBOARD_TYPING.path()),
+                Path(BuiltinAudioClip.KEYBOARD_TYPING2.path()),
+            ],
+            thinking_volume=settings.background_thinking_volume,
+            thinking_probability=settings.background_thinking_probability,
+        )
+        session.output.audio = ambient_output
+
     disconnected = asyncio.Event()
     tts_language = ["ur"]
 
@@ -334,6 +604,11 @@ async def entrypoint(ctx: JobContext) -> None:
         if participant is not None and remote.identity == participant.identity:
             logger.info("caller disconnected")
             disconnected.set()
+
+    @session.on("agent_state_changed")
+    def _on_agent_state_changed(event: AgentStateChangedEvent) -> None:
+        if ambient_output is not None and event.new_state == "thinking":
+            ambient_output.play_thinking()
 
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(event: UserInputTranscribedEvent) -> None:
@@ -350,8 +625,8 @@ async def entrypoint(ctx: JobContext) -> None:
         await session.start(agent=agent, room=ctx.room)
         if console_ambience is not None:
             await console_ambience.start()
-        elif background_audio is not None:
-            await background_audio.start(room=ctx.room, agent_session=session)
+        elif ambient_output is not None:
+            await ambient_output.start()
         greeting = (
             URDU_GREETING_INSTRUCTIONS
             if settings.supports_urdu
@@ -367,11 +642,11 @@ async def entrypoint(ctx: JobContext) -> None:
                 await console_ambience.aclose()
             except Exception:
                 logger.debug("console ambience was already closed", exc_info=True)
-        if background_audio is not None:
+        if ambient_output is not None:
             try:
-                await background_audio.aclose()
+                await ambient_output.aclose()
             except Exception:
-                logger.debug("background audio was already closed", exc_info=True)
+                logger.debug("ambient output was already closed", exc_info=True)
         try:
             await session.aclose()
         except Exception:
