@@ -23,11 +23,11 @@ cp .env.example .env
 # edit .env and fill in the required keys
 ```
 
-For local testing, set:
+Set the production n8n webhook and its shared secret in `.env`:
 
 ```env
-N8N_WEBHOOK_BASE_URL=http://localhost:5678/webhook
-N8N_WEBHOOK_SECRET=dev-secret
+N8N_WEBHOOK_BASE_URL=https://kh01199.app.n8n.cloud/webhook/clinic-agent
+N8N_WEBHOOK_SECRET=your-webhook-secret
 ```
 
 ## Speech
@@ -42,8 +42,6 @@ Useful settings in `.env`:
 | --- | --- | --- |
 | `DEEPGRAM_API_KEY` | required | Deepgram STT and TTS |
 | `TTS_MODEL` | `aura-2-thalia-en` | Deepgram Aura voice |
-| `BACKGROUND_AMBIENCE_FILE` | `assets/hospital-ambience.mp3` | Looping call ambience |
-| `BACKGROUND_MIX_VOLUME` | `0.12` | Ambience level under the agent voice |
 
 ## Voice samples
 
@@ -56,38 +54,6 @@ python test_voices.py
 Files are written to `voice_tests/`. Use `--model` or `--out` to try another
 Aura voice. `--dry-run` prints the samples without calling Deepgram.
 
-## Background audio
-
-The ElevenLabs hospital ambience in `assets/hospital-ambience.mp3` loops under
-the call at low volume, and soft typing plays only while the agent is thinking or
-calling a tool. The clip is mixed into the **same audio track** as the agent's
-voice, so a browser or SIP client only has to play the primary agent track.
-
-Replace `assets/hospital-ambience.mp3` with another recording, or point
-`BACKGROUND_AMBIENCE_FILE` at a different file. If the file is missing, the agent
-falls back to the built-in office ambience and logs a warning. Disable all
-background audio with:
-
-```env
-ENABLE_BACKGROUND_AUDIO=false
-```
-
-`BACKGROUND_MIX_VOLUME` controls the ambience under the agent voice on real
-calls and defaults to `0.12`. The ambience automatically ducks to half volume
-while the agent speaks, keeping the voice clear. `BACKGROUND_AMBIENCE_VOLUME`
-controls the louder local playback in console mode and defaults to `0.30`. Keep
-the call mix around `0.10`–`0.18` so speech stays clear.
-
-Console mode does not publish a room track, so the agent plays the same ambience
-through your local speakers when you run `python main.py console`. If console
-mode still has no ambience, check the
-`console ambience playing locally: ...` log line and your Mac's output device.
-
-Troubleshooting tip: the agent logs `speech=deepgram ...` at startup, and if the
-ambience file is missing it logs `background ambience file not found`. The MP3
-was normalized to a `-3 dB` peak and crossfaded for seamless looping. If it is
-still too quiet on a call, raise `BACKGROUND_MIX_VOLUME` to `0.15` or `0.18`.
-
 ## Run
 
 1. Download the VAD and turn-detector models once:
@@ -96,13 +62,7 @@ still too quiet on a call, raise `BACKGROUND_MIX_VOLUME` to `0.15` or `0.18`.
 python main.py download-files
 ```
 
-2. Start the mock n8n server in one terminal:
-
-```bash
-python mock_n8n.py
-```
-
-3. Run the agent in another terminal:
+2. Run the agent:
 
 ```bash
 python main.py console
@@ -136,14 +96,12 @@ timeouts, connection errors or invalid JSON.
 
 ```
 clinic-voice-agent/
-|-- main.py            # AgentSession, English speech, background audio, call logging
+|-- main.py            # AgentSession, English speech, call logging
 |-- prompts.py         # English-only system prompt, greeting, doctor list
 |-- tools.py           # validation and n8n webhook tools
 |-- config.py          # .env loading and settings
 |-- test_voices.py     # English Deepgram Aura voice samples
-|-- assets/
-|   `-- hospital-ambience.mp3  # looping ElevenLabs call ambience
-|-- mock_n8n.py        # local fake webhooks on port 5678
+|-- mock_n8n.py        # optional local fake webhooks
 |-- .env.example
 |-- .gitignore
 |-- requirements.txt
