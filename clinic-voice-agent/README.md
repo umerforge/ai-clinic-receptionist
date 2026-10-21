@@ -147,6 +147,8 @@ A sanitized workflow export is included at
 [`n8n/clinic-agent.workflow.json`](n8n/clinic-agent.workflow.json). It contains no
 credentials, Supabase project refs, webhook secrets, or pinned execution data.
 
+![Clinic Agent n8n workflow](n8n/clinic-agent-workflow.png)
+
 See [`n8n/README.md`](n8n/README.md) for import steps, required Supabase objects,
 and credential setup. The export currently implements `check-availability` and
 `book-appointment`; add branches for the other actions listed above before
@@ -202,6 +204,7 @@ clinic-voice-agent/
 |-- test_voices.py     # Deepgram Aura voice samples
 |-- n8n/
 |   |-- clinic-agent.workflow.json
+|   |-- clinic-agent-workflow.png
 |   `-- README.md
 |-- requirements.txt
 |-- .env.example

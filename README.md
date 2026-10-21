@@ -19,6 +19,7 @@ the voice worker holds no database credentials.
     |-- config.py
     |-- n8n/
     |   |-- clinic-agent.workflow.json
+    |   |-- clinic-agent-workflow.png
     |   `-- README.md
     |-- mock_n8n.py
     |-- test_voices.py

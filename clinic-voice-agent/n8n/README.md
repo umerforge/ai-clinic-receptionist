@@ -4,6 +4,11 @@
 voice agent. It contains no credentials, project references, instance IDs,
 pinned execution data, webhook secrets, or calendar email addresses.
 
+![Clinic Agent n8n workflow](clinic-agent-workflow.png)
+
+The endpoint captions in this preview are redacted; the workflow JSON is the
+source of truth.
+
 ## Import
 
 1. In n8n, open **Workflows → Import from file** and select
