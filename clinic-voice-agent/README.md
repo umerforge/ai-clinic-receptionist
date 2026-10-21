@@ -53,6 +53,7 @@ Useful settings in `.env`:
 | `SONIOX_VOICE` | `Maya` | TTS voice name |
 | `STT_LANGUAGE_HINTS` | `ur,en` | Languages Soniox should expect |
 | `TTS_SPEED` | `1.0` | Speaking rate, `0.7` to `1.3` |
+| `BACKGROUND_AMBIENCE_FILE` | `assets/hospital-ambience.mp3` | Looping call ambience |
 | `SONIOX_ENDPOINT_DELAY_MS` | `800` | Endpointing delay before a reply |
 | `SONIOX_ENDPOINT_SENSITIVITY` | `0.3` | Endpointing sensitivity |
 | `SONIOX_ENDPOINT_LATENCY_LEVEL` | `1` | Higher is more aggressive |
@@ -72,14 +73,22 @@ Soniox.
 
 ## Background audio
 
-A quiet office ambience plays under the call, and soft typing plays only while
-the agent is thinking or calling a tool. Disable it with:
+The ElevenLabs hospital ambience in `assets/hospital-ambience.mp3` loops under
+the call at low volume, and soft typing plays only while the agent is thinking or
+calling a tool. The ElevenLabs clip is 12 seconds long, so it loops for the whole
+call.
+
+Replace `assets/hospital-ambience.mp3` with another recording, or point
+`BACKGROUND_AMBIENCE_FILE` at a different file. If the file is missing, the agent
+falls back to the built-in office ambience and logs a warning. Disable all
+background audio with:
 
 ```env
 ENABLE_BACKGROUND_AUDIO=false
 ```
 
-Volumes and typing frequency are configurable in `.env`.
+Volume (`BACKGROUND_AMBIENCE_VOLUME`) and typing frequency are configurable in
+`.env`. Keep the ambience around `0.10`–`0.18` so speech stays clear.
 
 ## Run
 
@@ -134,6 +143,8 @@ clinic-voice-agent/
 |-- tools.py           # validation and n8n webhook tools
 |-- config.py          # .env loading, provider resolution and settings
 |-- test_voices.py     # Urdu/English Soniox voice samples
+|-- assets/
+|   `-- hospital-ambience.mp3  # looping ElevenLabs call ambience
 |-- mock_n8n.py        # local fake webhooks on port 5678
 |-- .env.example
 |-- .gitignore

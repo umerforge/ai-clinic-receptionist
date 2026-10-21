@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from livekit import rtc
@@ -122,12 +123,25 @@ def _build_tts() -> deepgram.TTS | soniox.TTS:
     )
 
 
+def _ambient_source() -> str | BuiltinAudioClip:
+    path = Path(settings.background_ambience_file)
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parent / path
+    if not path.is_file():
+        logger.warning(
+            "background ambience file not found: %s; using built-in office ambience",
+            path,
+        )
+        return BuiltinAudioClip.OFFICE_AMBIENCE
+    return str(path)
+
+
 def _build_background_audio() -> BackgroundAudioPlayer | None:
     if not settings.enable_background_audio:
         return None
     return BackgroundAudioPlayer(
         ambient_sound=AudioConfig(
-            BuiltinAudioClip.OFFICE_AMBIENCE,
+            _ambient_source(),
             volume=settings.background_ambience_volume,
             fade_in=1.5,
             fade_out=1.0,

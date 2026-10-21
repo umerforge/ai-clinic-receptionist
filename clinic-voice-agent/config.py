@@ -109,6 +109,7 @@ class Settings:
     soniox_endpoint_latency_level: int = 1
     tts_speed: float = 1.0
     enable_background_audio: bool = True
+    background_ambience_file: str = "assets/hospital-ambience.mp3"
     background_ambience_volume: float = 0.12
     background_thinking_volume: float = 0.18
     background_thinking_probability: float = 0.55
@@ -187,6 +188,9 @@ def _load_settings() -> Settings:
         ),
         tts_speed=_float("TTS_SPEED", 1.0, low=0.7, high=1.3),
         enable_background_audio=_bool("ENABLE_BACKGROUND_AUDIO", True),
+        background_ambience_file=_optional(
+            "BACKGROUND_AMBIENCE_FILE", "assets/hospital-ambience.mp3"
+        ),
         background_ambience_volume=_float(
             "BACKGROUND_AMBIENCE_VOLUME", 0.12, low=0.0, high=1.0
         ),
