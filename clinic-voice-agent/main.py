@@ -136,6 +136,84 @@ def _ambient_source() -> str | BuiltinAudioClip:
     return str(path)
 
 
+def _ambient_file() -> Path:
+    source = _ambient_source()
+    if isinstance(source, BuiltinAudioClip):
+        return Path(source.path())
+    return Path(source)
+
+
+class ConsoleAmbience:
+    """Play the ambience through local speakers so console mode is testable."""
+
+    def __init__(self, path: Path, volume: float) -> None:
+        self._path = path
+        self._volume = volume
+        self._stream = None
+        self._audio = None
+        self._position = 0
+
+    async def start(self) -> None:
+        try:
+            import av
+            import numpy as np
+            import sounddevice as sd
+
+            container = av.open(str(self._path))
+            stream = container.streams.audio[0]
+            sample_rate = stream.rate
+            frames = list(container.decode(audio=0))
+            container.close()
+            if not frames:
+                raise RuntimeError("ambience file has no audio")
+            audio = np.concatenate(
+                [frame.to_ndarray().astype(np.float32) for frame in frames], axis=1
+            ).T
+            audio *= self._volume
+            self._audio = audio
+
+            def callback(outdata, frame_count, _time, _status) -> None:
+                written = 0
+                remaining = frame_count
+                while remaining > 0:
+                    available = len(self._audio) - self._position
+                    take = min(available, remaining)
+                    outdata[written : written + take] = self._audio[
+                        self._position : self._position + take
+                    ]
+                    self._position = (self._position + take) % len(self._audio)
+                    written += take
+                    remaining -= take
+
+            self._stream = sd.OutputStream(
+                samplerate=sample_rate,
+                channels=audio.shape[1],
+                dtype="float32",
+                callback=callback,
+            )
+            self._stream.start()
+            logger.info(
+                "console ambience playing locally: %s (volume %.2f)",
+                self._path,
+                self._volume,
+            )
+        except Exception:
+            logger.warning(
+                "could not play console ambience through local speakers",
+                exc_info=True,
+            )
+            await self.aclose()
+
+    async def aclose(self) -> None:
+        stream = self._stream
+        self._stream = None
+        if stream is not None:
+            try:
+                stream.abort(ignore_errors=True)
+            finally:
+                stream.close(ignore_errors=True)
+
+
 def _build_background_audio() -> BackgroundAudioPlayer | None:
     if not settings.enable_background_audio:
         return None
@@ -219,7 +297,15 @@ async def entrypoint(ctx: JobContext) -> None:
     stt = _build_stt()
     tts = _build_tts()
     soniox_tts = tts if isinstance(tts, soniox.TTS) else None
-    background_audio = _build_background_audio()
+    console_ambience = None
+    background_audio = None
+    if settings.enable_background_audio:
+        if ctx.is_fake_job:
+            console_ambience = ConsoleAmbience(
+                _ambient_file(), settings.background_ambience_volume
+            )
+        else:
+            background_audio = _build_background_audio()
 
     session = AgentSession(
         stt=stt,
@@ -262,7 +348,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     try:
         await session.start(agent=agent, room=ctx.room)
-        if background_audio is not None:
+        if console_ambience is not None:
+            await console_ambience.start()
+        elif background_audio is not None:
             await background_audio.start(room=ctx.room, agent_session=session)
         greeting = (
             URDU_GREETING_INSTRUCTIONS
@@ -274,6 +362,11 @@ async def entrypoint(ctx: JobContext) -> None:
     except Exception:
         logger.exception("voice session failed")
     finally:
+        if console_ambience is not None:
+            try:
+                await console_ambience.aclose()
+            except Exception:
+                logger.debug("console ambience was already closed", exc_info=True)
         if background_audio is not None:
             try:
                 await background_audio.aclose()
