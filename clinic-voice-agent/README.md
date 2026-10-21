@@ -94,8 +94,11 @@ clinic-voice-agent/
 - **401 from n8n**: `N8N_WEBHOOK_SECRET` does not match the n8n credential.
 - **Timeouts**: n8n is not reachable at `N8N_WEBHOOK_BASE_URL`. Check the URL,
   tunnel and that the workflow is active.
-- **Groq 429**: the free daily token limit is hit. Wait, or set
-  `GROQ_MODEL=llama-3.1-8b-instant`.
+- **Groq 429**: the free daily token limit is hit. Wait, or try a smaller model.
+- **Groq 404 model not found**: Groq retires models. Run
+  `curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"`
+  and set `GROQ_MODEL` to an available model. The default is now
+  `openai/gpt-oss-20b`; `openai/gpt-oss-120b` is a stronger alternative.
 - **Turn detector model errors**: run `python main.py download-files` again.
 - **Always "unknown" caller**: browser calls have no SIP id. Set `TEST_PHONE`.
 
@@ -107,7 +110,12 @@ clinic-voice-agent/
   the audio `inference.TurnDetector`; it still ships in 1.x, and keeping it makes
   `download-files` download the detector model. A future upgrade to 2.x should
   switch to the audio detector.
-- Preemptive generation is disabled to save Groq free-tier tokens.
+- The original default `llama-3.3-70b-versatile` was retired by Groq, so the
+  default is now `openai/gpt-oss-20b` (tools verified on Groq).
+- Latency tuning: `openai/gpt-oss-20b` is the default fast Groq model,
+  preemptive generation is enabled (adds some token usage), and endpointing is
+  set to `0.35s` minimum / `2.0s` maximum. Keep webhook responses under ~1s for
+  the best experience.
 - A successful reschedule is recorded as the `booked` call outcome because the
   agreed outcome list has no `rescheduled` value.
 - Caller phone priority: `sip.phoneNumber`, then `TEST_PHONE`, then `unknown`.

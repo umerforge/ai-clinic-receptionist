@@ -62,7 +62,7 @@ class Settings:
     groq_api_key: str = field(repr=False)
     n8n_webhook_base_url: str = field(repr=False)
     n8n_webhook_secret: str = field(repr=False)
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-20b"
     tts_model: str = "aura-2-thalia-en"
     test_phone: str = field(default="", repr=False)
     webhook_timeout_sec: float = 8.0
@@ -85,7 +85,7 @@ def _load_settings() -> Settings:
         groq_api_key=_required("GROQ_API_KEY"),
         n8n_webhook_base_url=_required("N8N_WEBHOOK_BASE_URL").rstrip("/"),
         n8n_webhook_secret=_required("N8N_WEBHOOK_SECRET"),
-        groq_model=_optional("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        groq_model=_optional("GROQ_MODEL", "openai/gpt-oss-20b"),
         tts_model=_optional("TTS_MODEL", "aura-2-thalia-en"),
         test_phone=_optional("TEST_PHONE"),
         webhook_timeout_sec=_timeout(),

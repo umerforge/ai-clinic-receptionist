@@ -91,7 +91,10 @@ async def entrypoint(ctx: JobContext) -> None:
         vad=ctx.proc.userdata["vad"],
         turn_handling=TurnHandlingOptions(
             turn_detection=MultilingualModel(),
-            preemptive_generation={"enabled": False},
+            # Keep turns snappy without cutting off normal pauses.
+            endpointing={"min_delay": 0.35, "max_delay": 2.0},
+            # Speculative LLM call: lower perceived latency at the cost of some tokens.
+            preemptive_generation={"enabled": True, "preemptive_tts": False},
         ),
     )
 
