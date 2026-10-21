@@ -88,7 +88,17 @@ ENABLE_BACKGROUND_AUDIO=false
 ```
 
 Volume (`BACKGROUND_AMBIENCE_VOLUME`) and typing frequency are configurable in
-`.env`. Keep the ambience around `0.10`–`0.18` so speech stays clear.
+`.env`. The default is `0.30`; keep it around `0.20`–`0.35` so speech stays clear.
+
+**Important:** `python main.py console` does not play background audio. LiveKit
+disables the background track for fake console jobs. Test the ambience with
+`python main.py dev` plus the Agents Playground, a browser call, or a real SIP
+call.
+
+Troubleshooting tip: the agent logs `speech provider=...` at startup, and if the
+ambience file is missing it logs `background ambience file not found`. The MP3
+was normalized to a `-3 dB` peak; if it is still too quiet, raise
+`BACKGROUND_AMBIENCE_VOLUME` to `0.35` or `0.40`.
 
 ## Run
 

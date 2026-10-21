@@ -110,7 +110,7 @@ class Settings:
     tts_speed: float = 1.0
     enable_background_audio: bool = True
     background_ambience_file: str = "assets/hospital-ambience.mp3"
-    background_ambience_volume: float = 0.12
+    background_ambience_volume: float = 0.3
     background_thinking_volume: float = 0.18
     background_thinking_probability: float = 0.55
     test_phone: str = field(default="", repr=False)
@@ -192,7 +192,7 @@ def _load_settings() -> Settings:
             "BACKGROUND_AMBIENCE_FILE", "assets/hospital-ambience.mp3"
         ),
         background_ambience_volume=_float(
-            "BACKGROUND_AMBIENCE_VOLUME", 0.12, low=0.0, high=1.0
+            "BACKGROUND_AMBIENCE_VOLUME", 0.3, low=0.0, high=1.0
         ),
         background_thinking_volume=_float(
             "BACKGROUND_THINKING_VOLUME", 0.18, low=0.0, high=1.0
