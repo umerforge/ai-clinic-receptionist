@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-import re
 import time
 from collections import deque
 from contextlib import suppress
@@ -24,54 +23,19 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     TurnHandlingOptions,
-    UserInputTranscribedEvent,
     WorkerOptions,
     cli,
 )
 from livekit.agents.utils.audio import AudioByteStream
 from livekit.agents.voice import io
-from livekit.plugins import deepgram, groq, silero, soniox
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins import deepgram, groq, silero
+from livekit.plugins.turn_detector.english import EnglishModel
 
 import tools
 from config import TIMEZONE, settings
-from prompts import (
-    GREETING_INSTRUCTIONS,
-    URDU_GREETING_INSTRUCTIONS,
-    build_system_prompt,
-)
+from prompts import GREETING_INSTRUCTIONS, build_system_prompt
 
 logger = logging.getLogger("clinic-agent")
-
-STT_TERMS = [
-    "Dr. Ahmed",
-    "Dr. Sara",
-    "Dr. Imran",
-    "appointment",
-    "reschedule",
-    "clinic",
-    "token",
-    "report",
-]
-
-_ARABIC_SCRIPT = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
-
-
-def _detect_language(text: str, fallback: str = "ur") -> str:
-    if _ARABIC_SCRIPT.search(text):
-        return "ur"
-    if any(char.isalpha() for char in text):
-        return "en"
-    return fallback
-
-
-def _event_language(event: UserInputTranscribedEvent) -> str:
-    if event.language:
-        code = str(event.language).lower().replace("_", "-").split("-")[0]
-        if code in settings.stt_language_hints:
-            return code
-    return _detect_language(event.transcript)
-
 
 class ClinicReceptionist(Agent):
     """Clinic agent that keeps the caller's phone outside the LLM arguments."""
@@ -79,7 +43,7 @@ class ClinicReceptionist(Agent):
     def __init__(self, *, caller_phone: str) -> None:
         now = datetime.now(ZoneInfo(TIMEZONE))
         super().__init__(
-            instructions=build_system_prompt(now, supports_urdu=settings.supports_urdu),
+            instructions=build_system_prompt(now),
             tools=tools.CLINIC_TOOLS,
         )
         self.caller_phone = caller_phone
@@ -91,37 +55,15 @@ def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load()
 
 
-def _build_stt() -> deepgram.STT | soniox.STT:
-    if settings.speech_provider == "soniox":
-        return soniox.STT(
-            api_key=settings.soniox_api_key,
-            params=soniox.STTOptions(
-                model=settings.soniox_stt_model,
-                language_hints=list(settings.stt_language_hints),
-                enable_language_identification=True,
-                max_endpoint_delay_ms=settings.soniox_endpoint_delay_ms,
-                endpoint_sensitivity=settings.soniox_endpoint_sensitivity,
-                endpoint_latency_adjustment_level=settings.soniox_endpoint_latency_level,
-                context=soniox.ContextObject(terms=STT_TERMS),
-            ),
-        )
+def _build_stt() -> deepgram.STT:
     return deepgram.STT(
         model="nova-3",
-        language="multi",
+        language="en",
         api_key=settings.deepgram_api_key,
     )
 
 
-def _build_tts() -> deepgram.TTS | soniox.TTS:
-    if settings.speech_provider == "soniox":
-        return soniox.TTS(
-            model=settings.soniox_tts_model,
-            language="ur",
-            voice=settings.soniox_voice,
-            speed=settings.tts_speed,
-            reduce_silence=True,
-            api_key=settings.soniox_api_key,
-        )
+def _build_tts() -> deepgram.TTS:
     return deepgram.TTS(
         model=settings.tts_model,
         api_key=settings.deepgram_api_key,
@@ -538,24 +480,11 @@ async def entrypoint(ctx: JobContext) -> None:
     caller_phone = tools.resolve_caller_phone(participant)
     started_at = time.monotonic()
 
-    if settings.speech_provider_requested == "auto" and not settings.supports_urdu:
-        logger.warning(
-            "SONIOX_API_KEY is not set. Falling back to Deepgram English-only speech; "
-            "Urdu and mixed-language replies are disabled. Set SONIOX_API_KEY to enable them."
-        )
-
-    logger.info(
-        "speech provider=%s stt=%s tts=%s voice=%s",
-        settings.speech_provider,
-        settings.soniox_stt_model if settings.supports_urdu else "nova-3",
-        settings.soniox_tts_model if settings.supports_urdu else settings.tts_model,
-        settings.soniox_voice if settings.supports_urdu else "aura",
-    )
+    logger.info("speech=deepgram stt=nova-3 tts=%s", settings.tts_model)
 
     agent = ClinicReceptionist(caller_phone=caller_phone)
     stt = _build_stt()
     tts = _build_tts()
-    soniox_tts = tts if isinstance(tts, soniox.TTS) else None
     console_ambience = None
     ambient_output = None
     if settings.enable_background_audio and ctx.is_fake_job:
@@ -569,7 +498,7 @@ async def entrypoint(ctx: JobContext) -> None:
         tts=tts,
         vad=ctx.proc.userdata["vad"],
         turn_handling=TurnHandlingOptions(
-            turn_detection=MultilingualModel(),
+            turn_detection=EnglishModel(),
             # Keep turns snappy without cutting off normal pauses.
             endpointing={"min_delay": 0.35, "max_delay": 2.0},
             # Speculative LLM call: lower perceived latency at the cost of some tokens.
@@ -592,7 +521,6 @@ async def entrypoint(ctx: JobContext) -> None:
         session.output.audio = ambient_output
 
     disconnected = asyncio.Event()
-    tts_language = ["ur"]
 
     @session.on("close")
     def _on_session_close(event: CloseEvent) -> None:
@@ -610,29 +538,13 @@ async def entrypoint(ctx: JobContext) -> None:
         if ambient_output is not None and event.new_state == "thinking":
             ambient_output.play_thinking()
 
-    @session.on("user_input_transcribed")
-    def _on_user_input_transcribed(event: UserInputTranscribedEvent) -> None:
-        if not event.is_final or soniox_tts is None:
-            return
-        language = _event_language(event)
-        if language == tts_language[0]:
-            return
-        soniox_tts.update_options(language=language)
-        tts_language[0] = language
-        logger.info("tts language switched to %s", language)
-
     try:
         await session.start(agent=agent, room=ctx.room)
         if console_ambience is not None:
             await console_ambience.start()
         elif ambient_output is not None:
             await ambient_output.start()
-        greeting = (
-            URDU_GREETING_INSTRUCTIONS
-            if settings.supports_urdu
-            else GREETING_INSTRUCTIONS
-        )
-        await session.generate_reply(instructions=greeting)
+        await session.generate_reply(instructions=GREETING_INSTRUCTIONS)
         await disconnected.wait()
     except Exception:
         logger.exception("voice session failed")

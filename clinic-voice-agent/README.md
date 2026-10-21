@@ -2,8 +2,7 @@
 
 A LiveKit voice receptionist for a small clinic in Pakistan. It checks doctor
 availability, books, cancels and reschedules appointments, answers clinic
-questions, and saves callback requests. It speaks Urdu, English, or a natural
-mix of both, and matches the caller's language on every turn.
+questions, and saves callback requests. It speaks clear, concise English.
 
 The agent talks only to n8n. It never talks to Supabase and holds no Supabase key.
 
@@ -31,46 +30,31 @@ N8N_WEBHOOK_BASE_URL=http://localhost:5678/webhook
 N8N_WEBHOOK_SECRET=dev-secret
 ```
 
-## Speech and language
+## Speech
 
-`SPEECH_PROVIDER=auto` uses **Soniox** when `SONIOX_API_KEY` is set. Soniox
-handles real-time Urdu and English code-switching for both STT and TTS, so it is
-required for Urdu calls. The TTS language switches between `ur` and `en`
-automatically from the caller's transcript.
-
-Without a Soniox key, the agent falls back to **Deepgram Nova-3 + Aura**, which
-is English-only. Startup logs a clear warning and the prompt disables Urdu
-replies instead of silently producing bad speech.
+Speech is English-only: **Deepgram Nova-3** for STT and **Deepgram Aura** for
+TTS. `DEEPGRAM_API_KEY` is required. The agent keeps replies short and clear so
+the voice stays intelligible over the phone.
 
 Useful settings in `.env`:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `SPEECH_PROVIDER` | `auto` | `auto`, `soniox`, or `deepgram` |
-| `SONIOX_API_KEY` | empty | Enables Urdu + English speech |
-| `SONIOX_STT_MODEL` | `stt-rt-v5` | Real-time STT model |
-| `SONIOX_TTS_MODEL` | `tts-rt-v2` | Real-time TTS model |
-| `SONIOX_VOICE` | `Maya` | TTS voice name |
-| `STT_LANGUAGE_HINTS` | `ur,en` | Languages Soniox should expect |
-| `TTS_SPEED` | `1.0` | Speaking rate, `0.7` to `1.3` |
+| `DEEPGRAM_API_KEY` | required | Deepgram STT and TTS |
+| `TTS_MODEL` | `aura-2-thalia-en` | Deepgram Aura voice |
 | `BACKGROUND_AMBIENCE_FILE` | `assets/hospital-ambience.mp3` | Looping call ambience |
 | `BACKGROUND_MIX_VOLUME` | `0.12` | Ambience level under the agent voice |
-| `SONIOX_ENDPOINT_DELAY_MS` | `800` | Endpointing delay before a reply |
-| `SONIOX_ENDPOINT_SENSITIVITY` | `0.3` | Endpointing sensitivity |
-| `SONIOX_ENDPOINT_LATENCY_LEVEL` | `1` | Higher is more aggressive |
 
 ## Voice samples
 
-Generate five Urdu and five English samples, plus three mixed-language samples,
-without placing a call:
+Generate five English samples without placing a call:
 
 ```bash
 python test_voices.py
 ```
 
-Files are written to `voice_tests/`. Use `--voice`, `--model`, `--speed`, or
-`--out` to try different settings. `--dry-run` prints the script without calling
-Soniox.
+Files are written to `voice_tests/`. Use `--model` or `--out` to try another
+Aura voice. `--dry-run` prints the samples without calling Deepgram.
 
 ## Background audio
 
@@ -99,7 +83,7 @@ through your local speakers when you run `python main.py console`. If console
 mode still has no ambience, check the
 `console ambience playing locally: ...` log line and your Mac's output device.
 
-Troubleshooting tip: the agent logs `speech provider=...` at startup, and if the
+Troubleshooting tip: the agent logs `speech=deepgram ...` at startup, and if the
 ambience file is missing it logs `background ambience file not found`. The MP3
 was normalized to a `-3 dB` peak and crossfaded for seamless looping. If it is
 still too quiet on a call, raise `BACKGROUND_MIX_VOLUME` to `0.15` or `0.18`.
@@ -152,11 +136,11 @@ timeouts, connection errors or invalid JSON.
 
 ```
 clinic-voice-agent/
-|-- main.py            # AgentSession, speech providers, background audio, call logging
-|-- prompts.py         # language-matching system prompt, greeting, doctor list
+|-- main.py            # AgentSession, English speech, background audio, call logging
+|-- prompts.py         # English-only system prompt, greeting, doctor list
 |-- tools.py           # validation and n8n webhook tools
-|-- config.py          # .env loading, provider resolution and settings
-|-- test_voices.py     # Urdu/English Soniox voice samples
+|-- config.py          # .env loading and settings
+|-- test_voices.py     # English Deepgram Aura voice samples
 |-- assets/
 |   `-- hospital-ambience.mp3  # looping ElevenLabs call ambience
 |-- mock_n8n.py        # local fake webhooks on port 5678
@@ -171,11 +155,8 @@ clinic-voice-agent/
 - **401 from n8n**: `N8N_WEBHOOK_SECRET` does not match the n8n credential.
 - **Timeouts**: n8n is not reachable at `N8N_WEBHOOK_BASE_URL`. Check the URL,
   tunnel and that the workflow is active.
-- **No Urdu voice**: set `SONIOX_API_KEY`. Deepgram fallback is English-only and
-  logs a warning at startup.
-- **Soniox 401**: check `SONIOX_API_KEY` and that the key has TTS and STT access.
-- **Soniox voice not found**: list voices in the Soniox dashboard and set
-  `SONIOX_VOICE` to an available name.
+- **Deepgram 401**: check `DEEPGRAM_API_KEY` and that it has STT and TTS access.
+- **Deepgram voice not found**: set `TTS_MODEL` to an available Aura voice model.
 - **Groq 429**: the free daily token limit is hit. Wait, or try a smaller model.
 - **Groq 404 model not found**: Groq retires models. Run
   `curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"`
@@ -187,17 +168,15 @@ clinic-voice-agent/
 ## Notes and assumptions
 
 - `livekit-agents` is pinned to `~=1.8.8`. The code uses
-  `TurnHandlingOptions(turn_detection=MultilingualModel())`, the multilingual
-  text turn detector. LiveKit now marks that detector as deprecated in favour of
-  the audio `inference.TurnDetector`; it still ships in 1.x, and keeping it makes
+  `TurnHandlingOptions(turn_detection=EnglishModel())`, the English text turn
+  detector. LiveKit now marks this detector as deprecated in favour of the audio
+  `inference.TurnDetector`; it still ships in 1.x, and keeping it makes
   `download-files` download the detector model. A future upgrade to 2.x should
   switch to the audio detector.
 - The original default `llama-3.3-70b-versatile` was retired by Groq, so the
   default is now `openai/gpt-oss-20b` (tools verified on Groq).
-- Soniox is the only tested stack here that supports real-time Urdu/English
-  code-switching end to end. Azure real-time STT supports `ur-IN`, not `ur-PK`;
-  Deepgram `multi` does not include Urdu; Google STT supports `ur-PK` only with
-  Chirp models in specific regions.
+- Speech is English-only by design. If a caller uses another language, the agent
+  politely says it can continue in English.
 - The agent is instructed to be honest that it is an AI. It never claims to be
   human or invents personal experiences.
 - Latency tuning: `openai/gpt-oss-20b` is the default fast Groq model,
