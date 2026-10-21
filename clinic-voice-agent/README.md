@@ -26,7 +26,7 @@ cp .env.example .env
 Set the production n8n webhook and its shared secret in `.env`:
 
 ```env
-N8N_WEBHOOK_BASE_URL=https://kh01199.app.n8n.cloud/webhook/clinic-agent
+N8N_WEBHOOK_URL=https://kh01199.app.n8n.cloud/webhook/clinic-agent
 N8N_WEBHOOK_SECRET=your-webhook-secret
 ```
 
@@ -74,11 +74,12 @@ For browser testing without a SIP caller id, set `TEST_PHONE` in `.env`.
 
 ## Webhook contract
 
-All requests are `POST {N8N_WEBHOOK_BASE_URL}/{path}` with
-`Content-Type: application/json` and `X-Webhook-Secret: {N8N_WEBHOOK_SECRET}`.
-n8n must return HTTP 200 with a JSON object.
+All requests are `POST {N8N_WEBHOOK_URL}` with
+`Content-Type: application/json`, `X-Webhook-Secret: {N8N_WEBHOOK_SECRET}`, and
+an `action` field that names the operation. n8n must return HTTP 200 with a JSON
+object.
 
-| Path | Request | Success response | Failure reasons |
+| `action` | Request | Success response | Failure reasons |
 | --- | --- | --- | --- |
 | `check-availability` | `doctor_name`, `date` (`YYYY-MM-DD`) | `{"success":true,"slots":["..."]}` | empty slots |
 | `book-appointment` | `patient_name`, `phone`, `doctor_name`, `starts_at`, `reason` | `{"success":true,"appointment_id","doctor","starts_at"}` | `slot_taken` |
@@ -111,7 +112,7 @@ clinic-voice-agent/
 ## Troubleshooting
 
 - **401 from n8n**: `N8N_WEBHOOK_SECRET` does not match the n8n credential.
-- **Timeouts**: n8n is not reachable at `N8N_WEBHOOK_BASE_URL`. Check the URL,
+- **Timeouts**: n8n is not reachable at `N8N_WEBHOOK_URL`. Check the URL,
   tunnel and that the workflow is active.
 - **Deepgram 401**: check `DEEPGRAM_API_KEY` and that it has STT and TTS access.
 - **Deepgram voice not found**: set `TTS_MODEL` to an available Aura voice model.

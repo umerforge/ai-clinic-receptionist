@@ -134,8 +134,9 @@ def _valid_future_datetime(
 
 
 async def post_n8n(path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """POST JSON to an n8n webhook. This function never raises and never retries."""
-    url = f"{settings.n8n_webhook_base_url}/{path.lstrip('/')}"
+    """POST JSON to the n8n webhook. This function never raises and never retries."""
+    url = settings.n8n_webhook_url
+    body = {**payload, "action": path}
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Secret": settings.n8n_webhook_secret,
@@ -144,7 +145,7 @@ async def post_n8n(path: str, payload: dict[str, Any]) -> dict[str, Any]:
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload, headers=headers) as response:
+            async with session.post(url, json=body, headers=headers) as response:
                 status = response.status
                 if status == 401:
                     logger.error(

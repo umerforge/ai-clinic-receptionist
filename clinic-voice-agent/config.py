@@ -17,7 +17,7 @@ _REQUIRED_VARS = (
     "LIVEKIT_API_SECRET",
     "GROQ_API_KEY",
     "DEEPGRAM_API_KEY",
-    "N8N_WEBHOOK_BASE_URL",
+    "N8N_WEBHOOK_URL",
     "N8N_WEBHOOK_SECRET",
 )
 
@@ -63,7 +63,7 @@ class Settings:
     livekit_api_key: str = field(repr=False)
     livekit_api_secret: str = field(repr=False)
     groq_api_key: str = field(repr=False)
-    n8n_webhook_base_url: str = field(repr=False)
+    n8n_webhook_url: str = field(repr=False)
     n8n_webhook_secret: str = field(repr=False)
     deepgram_api_key: str = field(repr=False)
     groq_model: str = "openai/gpt-oss-20b"
@@ -86,7 +86,7 @@ def _load_settings() -> Settings:
         livekit_api_key=_required("LIVEKIT_API_KEY"),
         livekit_api_secret=_required("LIVEKIT_API_SECRET"),
         groq_api_key=_required("GROQ_API_KEY"),
-        n8n_webhook_base_url=_required("N8N_WEBHOOK_BASE_URL").rstrip("/"),
+        n8n_webhook_url=_required("N8N_WEBHOOK_URL").rstrip("/"),
         n8n_webhook_secret=_required("N8N_WEBHOOK_SECRET"),
         deepgram_api_key=_required("DEEPGRAM_API_KEY"),
         groq_model=_optional("GROQ_MODEL", "openai/gpt-oss-20b"),
