@@ -1,0 +1,772 @@
+{
+  "name": "Clinic Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clinic-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-528, 144],
+      "id": "75893904-be6b-4662-9954-c8fc62244f4c",
+      "name": "Webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6fb7d2cc-cb2e-4cc1-a719-0a6b0f35418a",
+              "leftValue": "={{ $json.headers['x-webhook-secret'] || '' }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "={{ $env.CLINIC_WEBHOOK_SECRET }}"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-288, 144],
+      "id": "5ff9f4d6-a958-41e1-8376-b4c2dfdcdabf",
+      "name": "Secret OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: \"unauthorized\" } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [-32, 656],
+      "id": "2917d855-eb0d-4950-b821-c3566044f9a5",
+      "name": "Respond 401"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "fb715a95-f5fc-4606-8ebb-58a69dcd9048-0",
+                    "leftValue": "={{ $json.body.action }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "check"
+                  },
+                  {
+                    "id": "fb715a95-f5fc-4606-8ebb-58a69dcd9048-1",
+                    "leftValue": "={{ $json.body.action }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "check-availability"
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "check"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "13e7af31-5261-4027-9d5d-0fa50c2eb1b0-0",
+                    "leftValue": "={{ $json.body.action }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "book"
+                  },
+                  {
+                    "id": "13e7af31-5261-4027-9d5d-0fa50c2eb1b0-1",
+                    "leftValue": "={{ $json.body.action }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "book-appointment"
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "book"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [-32, 112],
+      "id": "7b9e5d18-99ad-4d53-8265-4c0fd8775f5c",
+      "name": "Route action"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: false, reason: \"unknown_action\" } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [384, 688],
+      "id": "eff1c0b1-8563-4485-b169-20f57fa52796",
+      "name": "Respond unknown action"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: false, reason: \"doctor_not_found\" } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1008, 688],
+      "id": "f358ac91-82bc-4784-b547-0282e34f2578",
+      "name": "Respond doctor_not_found"
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/doctors",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "id,full_name,slot_minutes"
+            },
+            {
+              "name": "full_name",
+              "value": "=ilike.*{{ ($('Webhook').first().json.body.doctor_name || '').replace(/^dr\\.?\\s*/i,'').trim() }}*"
+            },
+            {
+              "name": "is_active",
+              "value": "eq.true"
+            },
+            {
+              "name": "limit",
+              "value": "={{ $('Webhook').first().json.body.doctor_name ? 1 : 20 }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [160, -208],
+      "id": "c785cf5f-cd67-40cd-bc8f-2a797d3d9f32",
+      "name": "Find doctor (check)",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "56c26026-2337-4681-b1f3-ed1791adcd57",
+              "leftValue": "={{ $json.id || '' }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [432, -208],
+      "id": "4fe134b9-6595-49dc-9039-60d1a1516737",
+      "name": "Doctor found? (check)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/rpc/get_available_slots",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_doctor: $json.id, p_date: $('Webhook').first().json.body.date }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [784, -224],
+      "id": "7d59b653-b56d-4fbe-904d-50fb08fb88d5",
+      "name": "Get free slots",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const doctors = $('Doctor found? (check)').all().map(i => i.json);\nconst fmt = s => new Date(s).toLocaleString('en-GB', {timeZone: 'Asia/Karachi', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true});\nconst perDoctor = doctors.length > 1 ? 3 : 10;\nconst used = {};\nlet slots = [];\nfor (const item of $input.all()) {\n  const r = item.json;\n  if (!r.slot_start) continue;\n  let idx = 0;\n  const p = item.pairedItem;\n  if (typeof p === 'number') idx = p; else if (p && typeof p.item === 'number') idx = p.item;\n  const d = doctors[idx] || doctors[0] || {};\n  const name = d.full_name || null;\n  used[name] = (used[name] || 0) + 1;\n  if (used[name] > perDoctor) continue;\n  slots.push({ doctor: name, start: r.slot_start, label: fmt(r.slot_start) });\n}\nslots.sort((a, b) => new Date(a.start) - new Date(b.start));\nconst count = slots.length;\nslots = slots.slice(0, 12);\nreturn [{ json: { success: true, count, slots } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, -224],
+      "id": "7940894d-faea-432a-bb65-e18c6b38621d",
+      "name": "Format slots"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1808, -224],
+      "id": "ff6ed4c5-1bd6-49dd-91df-086bd948d018",
+      "name": "Respond slots"
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/doctors",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "id,full_name,slot_minutes"
+            },
+            {
+              "name": "full_name",
+              "value": "=ilike.*{{ ($('Webhook').first().json.body.doctor_name || '').replace(/^dr\\.?\\s*/i,'').trim() }}*"
+            },
+            {
+              "name": "is_active",
+              "value": "eq.true"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [224, 128],
+      "id": "3052be2e-de0f-4b36-9fb6-c955b577afbf",
+      "name": "Find doctor (book)",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "8b2e77ca-58c0-43a9-a9e4-6f7ad0e7a814",
+              "leftValue": "={{ $json.id || '' }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [464, 128],
+      "id": "31076059-15f7-4588-88f5-c6be24d806bb",
+      "name": "Doctor found? (book)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/patients",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "on_conflict",
+              "value": "phone"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ full_name: $('Webhook').first().json.body.patient_name, phone: $('Webhook').first().json.body.phone, email: $('Webhook').first().json.body.email || null }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [784, 112],
+      "id": "eafc9df1-d9fb-4d41-ae11-ab3f8507dd1d",
+      "name": "Upsert patient"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/appointments",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ doctor_id: $('Find doctor (book)').first().json.id, patient_id: $json.id, starts_at: $('Webhook').first().json.body.starts_at, ends_at: new Date(new Date($('Webhook').first().json.body.starts_at).getTime() + $('Find doctor (book)').first().json.slot_minutes * 60000).toISOString(), reason: $('Webhook').first().json.body.reason || null }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1024, 112],
+      "id": "41ea00f1-6d0e-4cb8-8b6c-38a7ec2dd337",
+      "name": "Insert appointment"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "76c02f81-c3e6-45e4-8898-3c1c512b6b2f",
+              "leftValue": "={{ $json.statusCode }}",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              },
+              "rightValue": 201
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1264, 112],
+      "id": "a12c553e-8e66-4937-9657-f90468400cb8",
+      "name": "Booked?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, appointment_id: $json.body[0].id, doctor: $('Find doctor (book)').first().json.full_name, starts_at: $json.body[0].starts_at } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1568, 96],
+      "id": "88213898-21e0-4741-a559-9cb6bab1bacc",
+      "name": "Respond success"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: false, reason: ($json.body && $json.body.code === '23P01') ? 'slot_taken' : 'system_error' } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1408, 288],
+      "id": "12504de8-1c2a-496a-a909-cfd102c8647d",
+      "name": "Respond failed"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "primary",
+          "mode": "id"
+        },
+        "start": "={{ $('Insert appointment').first().json.body[0].starts_at }}",
+        "end": "={{ $('Insert appointment').first().json.body[0].ends_at }}",
+        "additionalFields": {
+          "description": "={{ 'Phone: ' + $('Webhook').first().json.body.phone + '\\nReason: ' + ($('Webhook').first().json.body.reason || '-') }}",
+          "summary": "={{ $('Webhook').first().json.body.patient_name + ' - ' + $('Find doctor (book)').first().json.full_name }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [1808, 96],
+      "id": "4a5b9bfe-d65a-41ab-8a87-efb0e7e8f5d1",
+      "name": "Create calendar event"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/appointments",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "=eq.{{ $('Insert appointment').first().json.body[0].id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ calendar_event_id: $json.id }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2048, 96],
+      "id": "d16efc65-407c-4b5e-a763-2bf2ba3a1a0b",
+      "name": "Save event id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "10474746-4935-4478-8780-9128951a1937",
+              "leftValue": "={{ $('Upsert patient').first().json.email || '' }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2336, 96],
+      "id": "dd4ef4ae-3936-48d2-a88c-7b79878aabec",
+      "name": "Has email?"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Upsert patient').first().json.email }}",
+        "subject": "Your appointment is confirmed",
+        "message": "={{ 'Assalam o alaikum ' + $('Webhook').first().json.body.patient_name + ',<br><br>Your appointment with ' + $('Find doctor (book)').first().json.full_name + ' is confirmed for ' + new Date($('Insert appointment').first().json.body[0].starts_at).toLocaleString('en-GB', {timeZone: 'Asia/Karachi', dateStyle: 'full', timeStyle: 'short'}) + '.<br><br>Thank you.' }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [2672, 80],
+      "id": "67bcae19-34be-4d10-bd20-4574a257839a",
+      "name": "Send confirmation email"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Secret OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Secret OK?": {
+      "main": [
+        [
+          {
+            "node": "Route action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route action": {
+      "main": [
+        [
+          {
+            "node": "Find doctor (check)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Find doctor (book)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond unknown action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find doctor (check)": {
+      "main": [
+        [
+          {
+            "node": "Doctor found? (check)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Doctor found? (check)": {
+      "main": [
+        [
+          {
+            "node": "Get free slots",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond doctor_not_found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get free slots": {
+      "main": [
+        [
+          {
+            "node": "Format slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format slots": {
+      "main": [
+        [
+          {
+            "node": "Respond slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find doctor (book)": {
+      "main": [
+        [
+          {
+            "node": "Doctor found? (book)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Doctor found? (book)": {
+      "main": [
+        [
+          {
+            "node": "Upsert patient",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond doctor_not_found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert patient": {
+      "main": [
+        [
+          {
+            "node": "Insert appointment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert appointment": {
+      "main": [
+        [
+          {
+            "node": "Booked?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booked?": {
+      "main": [
+        [
+          {
+            "node": "Respond success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond success": {
+      "main": [
+        [
+          {
+            "node": "Create calendar event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create calendar event": {
+      "main": [
+        [
+          {
+            "node": "Save event id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save event id": {
+      "main": [
+        [
+          {
+            "node": "Has email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has email?": {
+      "main": [
+        [
+          {
+            "node": "Send confirmation email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

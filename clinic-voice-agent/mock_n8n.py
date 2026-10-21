@@ -167,8 +167,33 @@ async def log_call(request: web.Request) -> web.Response:
     return web.json_response({"success": True})
 
 
+async def dispatch(request: web.Request) -> web.Response:
+    body = await _payload(request)
+    if body is None:
+        return web.json_response(
+            {"success": False, "reason": "invalid_input"}, status=400
+        )
+    action = str(body.get("action", "")).strip()
+    handlers = {
+        "check-availability": check_availability,
+        "book-appointment": book_appointment,
+        "cancel-appointment": cancel_appointment,
+        "clinic-info": clinic_info,
+        "reschedule-appointment": reschedule_appointment,
+        "request-callback": request_callback,
+        "log-call": log_call,
+    }
+    handler = handlers.get(action)
+    if handler is None:
+        return web.json_response(
+            {"success": False, "reason": "invalid_input"}, status=400
+        )
+    return await handler(request)
+
+
 def create_app() -> web.Application:
     app = web.Application(middlewares=[log_and_auth])
+    app.router.add_post("/webhook", dispatch)
     app.router.add_post("/webhook/check-availability", check_availability)
     app.router.add_post("/webhook/book-appointment", book_appointment)
     app.router.add_post("/webhook/cancel-appointment", cancel_appointment)

@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import random
 import re
 from datetime import date as date_type
 from datetime import datetime
@@ -23,6 +25,14 @@ from config import TIMEZONE, settings
 
 logger = logging.getLogger(__name__)
 
+_WEBHOOK_SECRET = os.getenv("N8N_WEBHOOK_SECRET", "").strip()
+if not _WEBHOOK_SECRET:
+    raise RuntimeError(
+        "N8N_WEBHOOK_SECRET is not set. Add it to .env before starting the agent."
+    )
+
+_HUMAN_PAUSE_SEC = 2.0
+_HUMAN_FILLERS = ("Hmm.", "Okay.", "Alright.", "Let me check.")
 _PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 _CLINIC_INFO_KEYS = {"timings", "address", "fee", "emergency", "closed_days"}
 
@@ -133,13 +143,31 @@ def _valid_future_datetime(
     return parsed, None
 
 
-async def post_n8n(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _speak_filler(context: RunContext | None) -> None:
+    if context is None:
+        return
+    try:
+        context.session.say(random.choice(_HUMAN_FILLERS), add_to_chat_ctx=False)
+    except Exception:
+        logger.debug("could not speak filler", exc_info=True)
+
+
+async def post_n8n(
+    path: str,
+    payload: dict[str, Any],
+    *,
+    context: RunContext | None = None,
+    human_pause: bool = True,
+) -> dict[str, Any]:
     """POST JSON to the n8n webhook. This function never raises and never retries."""
+    if human_pause:
+        _speak_filler(context)
+        await asyncio.sleep(_HUMAN_PAUSE_SEC)
     url = settings.n8n_webhook_url
     body = {**payload, "action": path}
     headers = {
         "Content-Type": "application/json",
-        "X-Webhook-Secret": settings.n8n_webhook_secret,
+        "x-webhook-secret": _WEBHOOK_SECRET,
     }
     timeout = aiohttp.ClientTimeout(total=settings.webhook_timeout_sec)
 
@@ -183,26 +211,24 @@ async def post_n8n(path: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 @function_tool
 async def check_availability(
-    context: RunContext, doctor_name: str, date: str
+    context: RunContext, date: str, doctor_name: str | None = None
 ) -> dict[str, Any]:
-    """Check open appointment slots for a doctor on a date.
+    """Check open appointment slots for a date, optionally for one doctor.
 
     Args:
-        doctor_name: Full doctor name, for example Dr. Ahmed.
         date: Date in YYYY-MM-DD format.
+        doctor_name: Optional full doctor name, for example Dr. Ahmed.
     """
-    doctor = (doctor_name or "").strip()
-    if not doctor:
-        return _invalid_input("doctor_name is required")
-
     parsed, error = _valid_future_date(date)
     if error:
         return error
     assert parsed is not None
 
-    return await post_n8n(
-        "check-availability", {"doctor_name": doctor, "date": parsed.isoformat()}
-    )
+    payload: dict[str, Any] = {"date": parsed.isoformat()}
+    if doctor_name and (doctor := doctor_name.strip()):
+        payload["doctor_name"] = doctor
+
+    return await post_n8n("check-availability", payload, context=context)
 
 
 @function_tool
@@ -212,6 +238,8 @@ async def book_appointment(
     doctor_name: str,
     starts_at: str,
     reason: str,
+    phone: str | None = None,
+    email: str | None = None,
 ) -> dict[str, Any]:
     """Book an appointment for the caller.
 
@@ -220,6 +248,8 @@ async def book_appointment(
         doctor_name: Full doctor name, for example Dr. Ahmed.
         starts_at: ISO 8601 start time with +05:00, for example 2026-10-26T10:00:00+05:00.
         reason: Short reason for the visit.
+        phone: Optional phone number supplied by the caller.
+        email: Optional email address for the booking confirmation.
     """
     patient = (patient_name or "").strip()
     doctor = (doctor_name or "").strip()
@@ -233,15 +263,24 @@ async def book_appointment(
         return error
     assert parsed is not None
 
+    patient_phone = _caller_phone(context)
+    if phone and (clean_phone := phone.strip()):
+        patient_phone = normalize_phone(clean_phone) or clean_phone
+
+    payload: dict[str, Any] = {
+        "patient_name": patient,
+        "phone": patient_phone,
+        "doctor_name": doctor,
+        "starts_at": parsed.isoformat(),
+        "reason": (reason or "").strip(),
+    }
+    if email and (clean_email := email.strip()):
+        payload["email"] = clean_email
+
     result = await post_n8n(
         "book-appointment",
-        {
-            "patient_name": patient,
-            "phone": _caller_phone(context),
-            "doctor_name": doctor,
-            "starts_at": parsed.isoformat(),
-            "reason": (reason or "").strip(),
-        },
+        payload,
+        context=context,
     )
     if result.get("success") is True:
         _record_outcome(context, "booked")
@@ -265,6 +304,7 @@ async def cancel_appointment(context: RunContext, date: str) -> dict[str, Any]:
     result = await post_n8n(
         "cancel-appointment",
         {"phone": _caller_phone(context), "date": parsed.isoformat()},
+        context=context,
     )
     if result.get("success") is True:
         _record_outcome(context, "cancelled")
@@ -285,7 +325,7 @@ async def get_clinic_info(context: RunContext, key: str) -> dict[str, Any]:
         return _invalid_input(
             "key must be one of timings, address, fee, emergency, closed_days"
         )
-    return await post_n8n("clinic-info", {"key": normalized})
+    return await post_n8n("clinic-info", {"key": normalized}, context=context)
 
 
 @function_tool
@@ -315,6 +355,7 @@ async def reschedule_appointment(
             "old_date": old_parsed.isoformat(),
             "new_starts_at": new_parsed.isoformat(),
         },
+        context=context,
     )
     if result.get("success") is True:
         _record_outcome(context, "booked")
@@ -335,7 +376,9 @@ async def request_callback(context: RunContext, reason: str) -> dict[str, Any]:
         return _invalid_input("reason is required")
 
     result = await post_n8n(
-        "request-callback", {"phone": _caller_phone(context), "reason": text[:500]}
+        "request-callback",
+        {"phone": _caller_phone(context), "reason": text[:500]},
+        context=context,
     )
     if result.get("success") is True:
         _record_outcome(context, "handoff")
@@ -356,7 +399,9 @@ async def log_call(
     }
     timeout = min(5.0, settings.webhook_timeout_sec)
     try:
-        await asyncio.wait_for(post_n8n("log-call", payload), timeout=timeout)
+        await asyncio.wait_for(
+            post_n8n("log-call", payload, human_pause=False), timeout=timeout
+        )
     except Exception:
         logger.exception("call logging failed")
 

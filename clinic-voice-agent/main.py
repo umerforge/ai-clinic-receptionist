@@ -19,6 +19,9 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
+from livekit.agents import llm as agents_llm
+from livekit.agents.llm import FallbackAdapter
+from livekit.agents.voice import ModelSettings
 from livekit.plugins import deepgram, groq, silero
 from livekit.plugins.turn_detector.english import EnglishModel
 
@@ -41,6 +44,16 @@ class ClinicReceptionist(Agent):
         self.caller_phone = caller_phone
         self.call_outcomes: list[str] = []
 
+    async def llm_node(
+        self,
+        chat_ctx: agents_llm.ChatContext,
+        tools: list[agents_llm.Tool],
+        model_settings: ModelSettings,
+    ):
+        chat_ctx.truncate(max_items=24)
+        async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+            yield chunk
+
 
 def prewarm(proc: JobProcess) -> None:
     """Load the VAD once per worker process."""
@@ -59,6 +72,29 @@ def _build_tts() -> deepgram.TTS:
     return deepgram.TTS(
         model=settings.tts_model,
         api_key=settings.deepgram_api_key,
+    )
+
+
+def _build_llm() -> FallbackAdapter:
+    common = {
+        "api_key": settings.groq_api_key,
+        "max_completion_tokens": 200,
+        "parallel_tool_calls": False,
+        "max_retries": 0,
+    }
+    return FallbackAdapter(
+        [
+            groq.LLM(
+                model=settings.groq_model,
+                reasoning_effort="low",
+                **common,
+            ),
+            groq.LLM(model=settings.groq_fallback_model, **common),
+        ],
+        attempt_timeout=4.0,
+        max_retry_per_llm=0,
+        retry_interval=0.2,
+        sticky=True,
     )
 
 
@@ -106,19 +142,20 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session = AgentSession(
         stt=stt,
-        llm=groq.LLM(model=settings.groq_model, api_key=settings.groq_api_key),
+        llm=_build_llm(),
         tts=tts,
         vad=ctx.proc.userdata["vad"],
         turn_handling=TurnHandlingOptions(
             turn_detection=EnglishModel(),
             # Keep turns snappy without cutting off normal pauses.
             endpointing={"min_delay": 0.35, "max_delay": 2.0},
-            # Speculative LLM call: lower perceived latency at the cost of some tokens.
-            preemptive_generation={"enabled": True, "preemptive_tts": False},
+            # Avoid duplicate LLM calls that burn through Groq's TPM limit.
+            preemptive_generation={"enabled": False},
         ),
     )
 
     disconnected = asyncio.Event()
+    shutdown_requested = False
 
     @session.on("close")
     def _on_session_close(event: CloseEvent) -> None:
@@ -130,6 +167,19 @@ async def entrypoint(ctx: JobContext) -> None:
         if participant is not None and remote.identity == participant.identity:
             logger.info("caller disconnected")
             disconnected.set()
+
+    @ctx.room.on("disconnected")
+    def _on_room_disconnected(*_args: object) -> None:
+        logger.info("room disconnected")
+        disconnected.set()
+
+    async def _on_shutdown(reason: str) -> None:
+        nonlocal shutdown_requested
+        shutdown_requested = True
+        logger.info("shutdown requested: %s", reason)
+        disconnected.set()
+
+    ctx.add_shutdown_callback(_on_shutdown)
 
     try:
         await session.start(agent=agent, room=ctx.room)
@@ -151,15 +201,18 @@ async def entrypoint(ctx: JobContext) -> None:
             logger.exception("could not build the call report")
             transcript = ""
             outcome = "info"
-        try:
-            await tools.log_call(
-                caller_phone=caller_phone,
-                duration_sec=duration_sec,
-                outcome=outcome,
-                transcript=transcript,
-            )
-        except Exception:
-            logger.exception("call logging failed")
+        if shutdown_requested:
+            logger.info("skipping call log because the worker is shutting down")
+        else:
+            try:
+                await tools.log_call(
+                    caller_phone=caller_phone,
+                    duration_sec=duration_sec,
+                    outcome=outcome,
+                    transcript=transcript,
+                )
+            except Exception:
+                logger.exception("call logging failed")
 
 
 if __name__ == "__main__":
@@ -167,5 +220,6 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
+            shutdown_process_timeout=1.0,
         )
     )

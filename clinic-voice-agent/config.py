@@ -67,6 +67,7 @@ class Settings:
     n8n_webhook_secret: str = field(repr=False)
     deepgram_api_key: str = field(repr=False)
     groq_model: str = "openai/gpt-oss-20b"
+    groq_fallback_model: str = "qwen/qwen3.8-27b"
     tts_model: str = "aura-2-thalia-en"
     test_phone: str = field(default="", repr=False)
     webhook_timeout_sec: float = 8.0
@@ -90,6 +91,7 @@ def _load_settings() -> Settings:
         n8n_webhook_secret=_required("N8N_WEBHOOK_SECRET"),
         deepgram_api_key=_required("DEEPGRAM_API_KEY"),
         groq_model=_optional("GROQ_MODEL", "openai/gpt-oss-20b"),
+        groq_fallback_model=_optional("GROQ_FALLBACK_MODEL", "qwen/qwen3.8-27b"),
         tts_model=_optional("TTS_MODEL", "aura-2-thalia-en"),
         test_phone=_optional("TEST_PHONE"),
         webhook_timeout_sec=_timeout(),
